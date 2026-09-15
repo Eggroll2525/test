@@ -173,9 +173,9 @@
         body.theme-euro tr:nth-child(even) { background-color: var(--euro-light); }
         body.theme-asia th { background-color: var(--asia-theme); }
         body.theme-asia tr:nth-child(even) { background-color: var(--asia-light); }
-        .vs-label { color: var(--highlight); font-weight: bold; font-size: 0.7rem; margin: 0 1px; flex: 0 0 auto; }
-        .team-text-box { display: flex; align-items: flex-start; gap: 2px; font-size: 0.78rem; flex: 1 1 0; max-width: none; min-width: 0; }
-        .team-name { min-width: 0; overflow: visible; text-overflow: clip; white-space: normal; overflow-wrap: anywhere; word-break: normal; line-height: 1.15; }
+        .vs-label { color: var(--highlight); font-weight: bold; font-size: 0.7rem; margin: 0 1px; }
+        .team-text-box { display: inline-flex; align-items: center; gap: 2px; font-size: 0.78rem; max-width: 48%; min-width: 0; }
+        .team-name { overflow: visible; text-overflow: clip; white-space: normal; line-height: 1.15; }
         .tz-status-bar { text-align: center; font-size: 0.72rem; color: var(--highlight); font-weight: bold; margin-bottom: 8px; }
         tr { cursor: pointer; transition: background-color 0.2s; }
         body.theme-euro tr.selected-row { background-color: #cbd5e1 !important; color: #0b1a30; font-weight: 500; }
@@ -929,7 +929,7 @@
         }
 
         function selectCalendarDate(key) {
-            // 每次重新開啟月曆，第一次點擊都視為「新的日期篩選」。
+            // 日期點擊只修改本次開啟月曆的暫存值，不立即套用，也不關閉月曆。
             if (!calendarSelectionDirty) {
                 draftDateStart = key;
                 draftDateEnd = null;
@@ -941,29 +941,30 @@
             if (!draftDateStart) {
                 draftDateStart = key;
                 draftDateEnd = null;
-            } else if (draftDateEnd) {
+            } else if (!draftDateEnd) {
+                // 單日選擇：再點同一天＝取消；點不同日期＝建立日期區間。
                 if (key === draftDateStart) {
-                    // 取消起始日，保留原結束日作為單日。
+                    draftDateStart = null;
+                } else if (key < draftDateStart) {
+                    draftDateEnd = draftDateStart;
+                    draftDateStart = key;
+                } else {
+                    draftDateEnd = key;
+                }
+            } else {
+                // 已有區間：只有再次點擊已選的起／終點才取消該端。
+                // 點擊其他日期則開始一個新的選擇。
+                if (key === draftDateStart) {
                     draftDateStart = draftDateEnd;
                     draftDateEnd = null;
                 } else if (key === draftDateEnd) {
-                    // 取消結束日，保留原起始日作為單日。
                     draftDateEnd = null;
                 } else {
-                    // 點擊區間內或區間外的其他日期，視為重新開始新的選擇。
                     draftDateStart = key;
                     draftDateEnd = null;
                 }
-            } else if (key === draftDateStart) {
-                // 同一次開啟中再次點擊已選單日：取消日期選取。
-                draftDateStart = null;
-                draftDateEnd = null;
-            } else if (key < draftDateStart) {
-                draftDateEnd = draftDateStart;
-                draftDateStart = key;
-            } else {
-                draftDateEnd = key;
             }
+
             renderCalendar();
         }
 
@@ -977,14 +978,15 @@
             const button = document.getElementById('dateFilterButton');
             const isOpen = picker.classList.toggle('show');
             button.setAttribute('aria-expanded', String(isOpen));
+
             if (isOpen) {
-                // 新的一次開啟：保留上次篩選作為視覺參考，但尚未開始新的選擇。
+                // 每次重新開啟：先顯示目前已套用的日期，但重新開始本次選擇流程。
                 draftDateStart = dateRangeStart;
                 draftDateEnd = dateRangeEnd;
                 calendarSelectionDirty = false;
                 renderCalendar();
             } else {
-                // 手動關閉時放棄尚未完成的暫存選擇，保留上次已套用的篩選。
+                // 手動關閉：放棄本次尚未套用的暫存選擇。
                 draftDateStart = dateRangeStart;
                 draftDateEnd = dateRangeEnd;
                 calendarSelectionDirty = false;
@@ -997,6 +999,8 @@
             const button = document.getElementById('dateFilterButton');
             picker.classList.remove('show');
             button.setAttribute('aria-expanded', 'false');
+
+            // 關閉月曆時永遠回到最後一次已套用的狀態。
             draftDateStart = dateRangeStart;
             draftDateEnd = dateRangeEnd;
             calendarSelectionDirty = false;
@@ -1012,7 +1016,6 @@
             calendarSelectionDirty = false;
             document.getElementById('dateFilter').value = '';
             updateDateFilterButton();
-            renderCalendar();
             renderTable();
             closeDatePicker();
         }
@@ -1026,11 +1029,14 @@
 
             dateRangeStart = draftDateStart;
             dateRangeEnd = draftDateEnd;
+
             if (!dateRangeStart) {
                 document.getElementById('dateFilter').value = '';
             } else {
-                document.getElementById('dateFilter').value = dateRangeEnd ? `${dateRangeStart}|${dateRangeEnd}` : dateRangeStart;
+                document.getElementById('dateFilter').value =
+                    dateRangeEnd ? `${dateRangeStart}|${dateRangeEnd}` : dateRangeStart;
             }
+
             updateDateFilterButton();
             renderTable();
             closeDatePicker();
@@ -1038,8 +1044,16 @@
 
         document.addEventListener('click', (event) => {
             const control = document.getElementById('dateFilterControl');
-            if (control && !control.contains(event.target)) {
-                // 點擊月曆外部等同於取消本次尚未完成的修改，保留上一次已套用的篩選。
+            const picker = document.getElementById('datePicker');
+            if (!control || !picker || !picker.classList.contains('show')) return;
+
+            // 使用 click 的 composedPath 判斷原始點擊位置。
+            // 月曆日期按鈕點擊後會觸發 renderCalendar() 重建 DOM，
+            // 因此不能在這裡只用 control.contains(event.target)，否則會被誤判成點擊外部。
+            const path = typeof event.composedPath === 'function' ? event.composedPath() : [];
+            const clickedInsideControl = path.length ? path.includes(control) : control.contains(event.target);
+            if (!clickedInsideControl) {
+                // 點擊月曆外部：取消本次尚未完成的修改，保留上一次已套用的篩選。
                 closeDatePicker();
             }
         });
